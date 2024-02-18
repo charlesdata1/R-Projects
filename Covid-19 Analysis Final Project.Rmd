@@ -1,0 +1,262 @@
+---
+title: "Analysis on Johns Hopkins Covid19 Data"
+author: "Charles"
+date: "2024-02-06"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The Johns Hopkins COVID-19 dataset offers and extensive overview of global COVID-19 cases and fatalities. The is exploratory analysis aims to uncover regional disparities in COVID-19 cases within the United States. By employing logistic regressions, I will model the relationship between geographical regions and the prevalence of COVID-19 cases, seeking to understand how regional factors contributed to the spread of the virus. This approach not only highlights the variability across regions but also provides insights into the dynamics of COVID-19 transmissions. 
+
+
+Load Libraries
+
+```{r, message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(lubridate)
+library(dplyr)
+```
+
+Import Data
+
+```{r, message=FALSE}
+url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names <- c("time_series_covid19_confirmed_global.csv",
+                "time_series_covid19_deaths_global.csv",
+                "time_series_covid19_confirmed_US.csv",
+                "time_series_covid19_deaths_US.csv")
+urls <- str_c(url,file_names)
+
+global_cases <- read_csv(urls[1])
+global_deaths <- read_csv(urls[2])
+us_cases <- read_csv(urls[3])
+us_deaths <- read_csv(urls[4])
+us_cases
+```
+
+The data set is well-structured but requires additional tidying. First, we need to reshape the date columns using pivot_longer() to help us analyze and visualize the data. Next, we need to deal with our "NA" values. We can also remove or deselect Lat/Long since we won't be including it in our analysis.
+
+Our data set consists of 1154 columns, 1144 of which are date columns. We need to use the pivot_longer() function to reshape our data and make it easier to analyze and visualize.
+
+```{r, message=FALSE}
+us_cases1 <- us_cases %>%
+  pivot_longer(cols = -c(UID,iso2,iso3,code3,FIPS,Admin2,Province_State,Country_Region,Lat,Long_,Combined_Key),
+               names_to = "date",
+               values_to = "cases") %>%
+  dplyr::select(-Lat,-Long_)
+us_cases1
+  
+```
+
+Ok, looks like we can reduce the number of columns by deselecting superfluous information. Let's do it!
+
+```{r, message=FALSE}
+us_cases2 <- us_cases1 %>%
+  dplyr::select(-UID,-iso2,-iso3,-code3,-FIPS)
+us_cases2
+```
+
+Much better, now we need to change the date column from character to date type.
+
+```{r,message=FALSE}
+us_cases3 <- us_cases2 %>%
+  mutate(date = mdy(date))
+us_cases3
+```
+
+Next, we tidy our us_deaths data frame.
+
+```{r,message=FALSE}
+us_deaths1 <- us_deaths %>%
+  pivot_longer(cols = -c(UID:Population),
+               names_to = "date",
+               values_to = "deaths") %>%
+  dplyr::select(Admin2:deaths) %>%
+  mutate(date=mdy(date)) %>%
+  dplyr::select(-Lat,-Long_)
+us_deaths1
+```
+
+To ensure comprehensive analysis, we must merge the us_deaths and us_cases data frames, which are similarly structured. The key distinction is the presence of a population column in us_deaths that is absent in us_cases. Merging these data frames will allow us to consolidate all relevant columns for analysis.
+
+```{r,message=FALSE}
+us <- us_cases3 %>%
+  full_join(us_deaths1)
+us
+```
+
+Now, we visualize the data
+
+```{r, warning=FALSE,message=FALSE}
+US_by_state <- us %>%
+  group_by(Province_State,Country_Region,date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths *1000000 / Population) %>%
+  dplyr::select(Province_State,Country_Region,date,
+         cases,deaths,deaths_per_mill,Population) %>%
+  ungroup()
+
+US_by_state
+```
+
+Prior to analyzing regional trends, it's essential to examine overarching US patterns.
+
+```{r, warning=FALSE,message=FALSE}
+US_totals <-  US_by_state %>%
+  group_by(Country_Region,date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths *1000000 / Population) %>%
+  dplyr::select(Country_Region,date, cases,deaths,
+         deaths_per_mill,Population) %>%
+  ungroup()
+```
+
+```{r}
+US_totals %>%
+  filter(cases > 0) %>%
+  ggplot() +
+  geom_line(aes(x = date, y = cases, color = "Cases")) +
+  geom_line(aes(x = date, y = deaths, color = "Deaths")) +
+  scale_y_log10() + 
+  scale_color_manual(values = c("Cases" = "blue", "Deaths" = "red")) +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "US COVID-19 Data",
+       subtitle = "Cases and Deaths Over Time",
+       y = "Count",
+       color = "Metric")
+
+```
+
+Figure 1 illustrates the dynamic trajectory of COVID-19 cases and deaths from 2020 to 2023. Initially, both metrics surged rapidly during the early stages of the pandemic in 2020. The following year, 2021, witnessed a more gradual increase in infections and fatalities, culminating in a stabilization of numbers by 2022.
+
+In the following section, we introduce a new column titled "Region" to facilitate the analysis of COVID-19 cases and deaths by geographical region. This addition is crucial to understanding the spatial distribution of the pandemic's impact and enables a more nuanced exploration of regional trends and patterns.
+
+```{r}
+regions <- US_by_state %>%
+  mutate(Region = case_when(
+    Province_State %in% c("Alabama", "Arkansas", "Florida", "Georgia", "Kentucky", "Louisiana", "Mississippi", "North Carolina", "South Carolina", "Tennessee", "Virginia", "West Virginia") ~ "Southeast",
+    Province_State %in% c("Arizona", "New Mexico", "Oklahoma", "Texas") ~ "Southwest",
+    Province_State %in% c("Alaska", "California", "Hawaii", "Nevada", "Oregon", "Washington") ~ "Far West",
+    Province_State %in% c("Illinois", "Indiana", "Michigan", "Ohio", "Wisconsin") ~ "Great Lakes",
+    Province_State %in% c("Connecticut", "Maine", "Massachusetts", "New Hampshire", "Rhode Island", "Vermont") ~ "New England",
+    Province_State %in% c("Delaware", "District of Columbia", "Maryland", "New Jersey", "New York", "Pennsylvania") ~ "Mideast",
+    Province_State %in% c("Iowa", "Kansas", "Minnesota", "Missouri", "Nebraska", "North Dakota", "South Dakota") ~ "Plains",
+    Province_State %in% c("Colorado", "Idaho", "Montana", "Utah", "Wyoming") ~ "Rocky Mountain"
+  )
+  )
+unique(regions$Region)
+```
+
+```{r,message=FALSE,warning=FALSE}
+library(scales)
+regional_summary <- regions %>%
+  group_by(Region,date) %>%
+  filter(!is.na(Region)) %>%
+  summarise(deaths = sum(deaths, na.rm = TRUE),
+            cases = sum(cases, na.rm = TRUE),
+            population = sum(Population,na.rm=TRUE)) 
+  
+regional_visualization <- regional_summary %>%
+  ggplot(aes(x = date, y= cases, color = Region)) +
+  geom_line(size = 0.75) +
+  scale_y_continuous(labels = label_comma()) +
+  labs(title = "COVID-19 Cases by US Region",
+       x = "Date",
+       y = "Number of Cases",
+       color = "Region") +
+  theme_minimal() + 
+  theme(legend.position = "bottom",
+        legend.key.width = unit(1,"cm"),
+        legend.key.height = unit(.05,"cm"))
+
+regional_visualization
+
+regional_visualization_2 <- regional_summary %>%
+  ggplot(aes(x = date, y= deaths, color = Region)) +
+  geom_line(size = 0.75) +
+  scale_y_continuous(labels = label_comma()) +
+  labs(title = "COVID-19 Deaths by US Region",
+       x = "Date",
+       y = "Number of Deaths",
+       color = "Region") +
+  theme_minimal() + 
+  theme(legend.position = "bottom",
+        legend.key.width = unit(1,"cm"),
+        legend.key.height = unit(.05,"cm"))
+
+regional_visualization_2
+```
+
+Figures 2 and 3 provide a macro overview of regional trends for COVID-19 cases and deaths. Given that our analysis is predisposed to bias towards larger population centers, it becomes imperative to normalize the data. This normalization will facilitate more equitable comparative analysis across regions, allowing for adjustments based on population size to ensure the accuracy and relevance of our findings.
+
+```{r,message=FALSE,warning=FALSE}
+regional_summary_normalized <- regional_summary %>%
+  mutate(cases_per_100k = (cases / population) * 100000) %>%
+  mutate(deaths_per_100k = (deaths / population) * 100000)
+
+regional_normalized <- regional_summary_normalized %>%
+  ggplot(aes(x = date, y = cases_per_100k, color = Region)) +
+  geom_line(size = 0.75) +
+  scale_y_continuous(labels = label_comma()) +
+  labs(title = "COVID-19 Cases by US Region",
+       x = "Date",
+       y = "Number of Cases per 100k",
+       color = "Region") +
+  theme_minimal() + 
+  theme(legend.position = "bottom",
+        legend.key.width = unit(1,"cm"),
+        legend.key.height = unit(.05,"cm")) 
+
+regional_normalized_2 <- regional_summary_normalized %>%
+  ggplot(aes(x = date, y = deaths_per_100k, color = Region)) +
+  geom_line(size = 0.75) +
+  scale_y_continuous(labels = label_comma()) +
+  labs(title = "COVID-19 Deaths by US Region",
+       x = "Date",
+       y = "Number of Deaths per 100k",
+       color = "Region") +
+  theme_minimal() + 
+  theme(legend.position = "bottom",
+        legend.key.width = unit(1,"cm"),
+        legend.key.height = unit(.05,"cm")) 
+
+regional_normalized
+regional_normalized_2
+
+```
+
+Our normalized data in figures 4 and 5 provide a more refined analysis of COVID cases and deaths by region, revealing patterns and convergence in cases per 100k, with notable trends in the Southeast region. To delve deeper into the statistical significance of our observations and understand the relationship between our predictor variables and the count of COVID cases, we employ a Generalized Linear Model (GLM). GLMs are versatile, allowing us to model different types of response variables. For our case, where the response variable is the count of COVID cases(count variable) we use Poisson regression. Poisson regression is apt for modeling count data, enabling us to explore how changes in predictor variables affect the rate of COVID cases. It calculates the expected log count of events (cases or deaths) given the predictors in the model, such as region or time. By analyzing the coefficients produced by this model, we can interpret the impact of each predictor, where the exponentiated coefficients give us rate ratios. This means we can quantify how the presence or change in a predictor variable influences the rate of COVID cases, adjusting for other factors in the model.
+
+```{r, warning=FALSE}
+glm_cases <- glm(cases_per_100k ~ Region + date + offset(log(population)), data = regional_summary_normalized, family = poisson())
+summary(glm_cases)
+exp(coef(glm_cases))
+```
+
+Our analysis has identified statistically significant variations in COVID-19 case rates across different regions, as evidenced by p-values below the significance threshold of 0.001. This statistical significance is further elucidated through the analysis of the coefficients' magnitudes. When these coefficients are exponentiated, they reveal the relative differences in case rates per 100,000 individuals across regions in comparison to a designated baseline region. Specifically, the directionality of these coefficients (positive or negative) signifies whether the case rates are higher or lower relative to the baseline. Notably, the Rocky Mountain, New England, and Plains regions exhibit the most elevated exponentiated coefficients, highlighting a higher incidence rate. Conversely, the Southeast region, with an exponentiated coefficient of 0.78 and the sole negative coefficient, indicates a lower case rate per 100,000 individuals compared to the baseline.
+
+To further substantiate our findings, we will extend our analysis through the application of the Negative Binomial model. This model, akin to the Poisson model, is particularly adept at accommodating over-dispersion, a scenario where the variance significantly surpasses the mean. The inclusion of an additional parameter in the Negative Binomial model addresses this excess variability, rendering it an adept and flexible tool for analyzing count data that may not conform to the Poisson model's assumptions.
+
+```{r, warning=FALSE,message=FALSE}
+library(MASS)
+
+nb_model <- glm.nb(cases_per_100k ~ Region + date + offset(log(population)), data = regional_summary_normalized)
+
+coef(nb_model)
+
+```
+
+Excellent, the results from our Negative Binomial model are consistent with those obtained from the Poisson Model. Notably, the Rocky Mountain, New England, and Plains regions exhibit the highest coefficients, whereas the Southeast region is distinguished by its negative coefficient. This concordance between model outputs not only validates our analytic approach but also underscores the critical role of employing multiple statistical models for verification purposes. Such a methodology is particularly invaluable in complex scenarios, such as elucidating the dynamics of infectious disease spread, where accuracy and reliability of findings are paramount.
+
+# Sources of Potential Bias
+
+1. The US COVID-19 data was biased towards larger population centers, potentially obscuring more detailed regional insights. To address this issue, I normalized the data, thereby facilitating a more nuanced comparative analysis across regions. This normalization process ensures that our findings account for population size variations, enabling a more equitable assessment of COVID-19's impacts. 
