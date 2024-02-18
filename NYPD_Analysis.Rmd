@@ -1,0 +1,158 @@
+---
+title: "NYPD Shooting Incident Analysis"
+author: "Charles"
+date: "2024-02-03"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# The NYPD Shooting Incident dataset provides a comprehensive overview of shooting incidents in New York City. This exploratory anlysis is designed to uncover the relationshiop between the time of day and borough location with the occurrence and severity of shootings. To faciliate my analyis I will employ a logistic regression to model the temporal (time of day) and spatial (borough) factors in assessing the probability of fatal shooting incidnetns. This approach will enhance our understanding of the dynamics influencing shootigns and their outcome across different times and areas within New York City.
+
+
+Load Libraries 
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse) 
+library(lubridate) 
+library(dplyr) 
+library(ggplot2)
+```
+
+ Import data
+
+```{r get_NYPD_data, message=FALSE}
+# used to read data
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+nypd_data <- read_csv(url) 
+```
+
+Summarize data to provide conceptual understanding
+
+```{r summarize_data,message=FALSE,warning=FALSE}
+summary_data <- summary(nypd_data)
+summary_data
+
+summary_data1 <- nypd_data %>%
+  count(BORO,sort = TRUE) 
+summary_data1
+```
+
+Looking at our summary data we see there's a few columns we need to tidy for analytic purposes
+
+Tidy data
+
+```{r tidy_data, message=FALSE, warning=FALSE}
+data <- nypd_data %>%
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE),
+  OCCUR_TIME = hms(OCCUR_TIME),
+  YEAR = year(OCCUR_DATE),
+  MONTH = month(OCCUR_DATE),
+  MONTH_label = month(OCCUR_DATE, label = TRUE),
+  HOUR = hour(OCCUR_TIME))
+
+data <- data %>%
+  dplyr::select(-LOC_OF_OCCUR_DESC, -LOC_CLASSFCTN_DESC) %>%
+  mutate_if(is.character, ~replace(., is.na(.), "UNKNOWN")) %>%
+  mutate(PRECINCT = as.factor(PRECINCT))
+```
+
+Analyze data
+
+```{r analyze_data, message=FALSE}
+data %>%
+  group_by(YEAR, BORO) %>%
+  summarise(INCIDENTS = n_distinct(INCIDENT_KEY)) %>%
+  ggplot(aes(x = YEAR, y = INCIDENTS, group = BORO, color = BORO)) +
+  geom_line() +
+  geom_point(size = 2, shape = 1) +
+  geom_hline(aes(yintercept = mean(INCIDENTS)), color = "black", lty = "dashed") +
+  scale_x_continuous(breaks = seq(2006, 2022, 2)) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(size = 10, color = 'black'),
+    axis.text.y = element_text(size = 10, color = 'black')
+  ) +
+  labs(
+    title = "New York City Shooting Incidents per Year by Borough",
+    x = "Year",
+    y = "Count of Shooting Incidents"
+  )
+
+```
+
+Figure 1 shows the temporal progression of shooting incidents recorded between 2006 and 2022. An analysis of the data reveals a consistent decline in the frequency of such incidents from 2006 until 2019. However, this descending trajectory underwent a reversal in 2019, marked by a notable upsurge in incidents, with the boroughs of the Bronx and Brooklyn experiencing the most significant escalations. The subsequent period, encompassing the years 2020 and 2021, was characterized by a precipitous decline in the frequency of shooting incidents. Notably, the incident frequency in Staten Island remained generally constant throughout the observed period from 2006 to 2022. 
+
+The next phase of our analysis will extend to include the time of day, thereby enriching our comprehension of the temporal and spatial dimensions in the distribution of incident frequency. 
+
+Time of day analysis
+
+```{r}
+data1 <- data %>%
+  mutate(
+    TIME_CATEGORY = case_when(
+      HOUR >= 5 & HOUR < 12  ~ "Morning",
+      HOUR >= 12 & HOUR < 17 ~ "Afternoon",
+      HOUR >= 17 & HOUR < 20 ~ "Evening",
+      TRUE                   ~ "Night"
+    )
+  )
+ggplot(data1, aes(x = TIME_CATEGORY, fill = BORO)) +
+  geom_bar() +
+  labs(
+    title = "Distribution of Incidents by Time of Day",
+    x = "Time of Day",
+    y = "Number of Incidents"
+  ) +
+  theme_minimal()
+```
+
+Next we'll use  a stacked bar chart with percentages to enhance our understanding of the distribution of incidents by time of day.  
+
+```{r}
+# Calculate the percentages
+data2 <- data1 %>%
+  count(BORO, TIME_CATEGORY) %>%
+  group_by(TIME_CATEGORY) %>%
+  mutate(perc = n / sum(n) * 100)
+
+# Create the stacked bar chart
+ggplot(data2, aes(x = TIME_CATEGORY, y = perc, fill = BORO)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(round(perc, 1), "%")), position = position_stack(vjust = 0.5)) +
+  labs(
+    title = "Distribution of Incidents by Time of Day",
+    x = "Time of Day",
+    y = "Percentage of Incidents"
+  ) +
+  theme_minimal()
+```
+
+In our comprehensive analysis depicted in Figure 3, we quantitatively demonstrate that, across the evaluated time periods, Brooklyn and the Bronx collectively constitute approximately 70% of the total recorded shooting incidents. Meanwhile, Manhattan and Queens together account for roughly 27% of the incidents, with Staten Island comprising the remaining three percent.
+
+
+```{r}
+summary(data1)
+data3 <- data2 %>%
+  mutate(
+    TIME_CATEGORY = as.factor(TIME_CATEGORY),
+    BORO = as.factor(BORO)
+  )
+
+
+model <- glm(STATISTICAL_MURDER_FLAG ~ TIME_CATEGORY + BORO, data = data1, family = "binomial")
+
+
+summary(model)
+```
+
+In the logistic regression analysis, we identified two predictors with statistically significant associations with the outcome variable. The time category 'Morning' has a p-value substantially below 0.001, its level of significance, and a positive coefficient, 0.35, indicating a robust association with the incidence of murders. Additionally, the variable representing Manhattan exhibits a p-value below 0.05, and a negative coefficient, -0.119, denoting a significant but lesser likelihood of shootings being fatal compared to the reference boroughs. In contrast, the non-significant p-values for other time categories suggest no substantial deviation from the baseline in terms of their association with murder outcomes. 
+
+
+Bias
+1. Upon initiating the analysis of the data, I became aware of a potential bias, particularly as it pertains to the predominance of minority groups among both perpetrators and victims. As a member of a minority community, this observation elicited slight discomfort and highlighted the potential risk that such biases pose in deterring comprehensive demographic analysis. To address and mitigate these biases it is essential to actively acknowledge their presence and engage with them through a process of reflection and adjustment. It is important for data professionals to recognize the existence of conscious and unconscious biases within ourselves and undertake measures to counteract their influence on our work. This commitment to bias mitigation is crucial to ensuring the integrity and objectivity of our analyses. 
